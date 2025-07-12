@@ -1,205 +1,226 @@
-# ───────────── User Management ─────────────
-- name: Ensure groups exist
-  group:
-    name: "{{ item.groups }}"
-    state: present
-  with_items: "{{ users }}"
-  loop_control:
-    loop_var: item
+---
+- name: User management & SSH hardening
+  hosts: all
+  become: yes
 
-- name: Create users and assign groups
-  user:
-    name: "{{ item.username }}"
-    shell: /bin/bash
-    createhome: yes
-    comment: 'Created by Ansible'
-    groups: "{{ item.groups }}"
-  with_items: "{{ users }}"
-  loop_control:
-    loop_var: item
+  vars:
+    groups:
+      - devops
+      - developer
+      - leader
 
-- name: Upload authorized SSH keys
-  authorized_key:
-    user: "{{ item.username }}"
-    key: "{{ lookup('file', 'files/{{ item.username }}.pub') }}"
-  with_items: "{{ users }}"
-  loop_control:
-    loop_var: item
+    users:
+      - username: mdpavlyutin
+        groups: leader
+      - username: runner
+        groups: developer
+      - username: nchernikov
+        groups: leader
 
-# ───────────── Sudoers Config ─────────────
-- name: Grant sudo access to groups
-  lineinfile:
-    dest: /etc/sudoers
-    insertafter: EOF
-    line: "%{{ item }} ALL=(ALL) NOPASSWD: ALL"
-    validate: 'visudo -cf %s'
-  loop:
-    - devops
-    - developer
-    - leader
 
-# ───────────── Set Environment Variables ─────────────
-- name: Set USER_ROLE environment variable for devops and developer
-  lineinfile:
-    path: "/home/{{ item.username }}/.bashrc"
-    line: "export USER_ROLE=devops"
-    state: present
-  when: "'devops' in item.groups or 'developer' in item.groups"
-  with_items: "{{ users }}"
-  loop_control:
-    loop_var: item
-
-- name: Set USER_ROLE environment variable for leader
-  lineinfile:
-    path: "/home/{{ item.username }}/.bashrc"
-    line: "export USER_ROLE=leader"
-    state: present
-  when: "'leader' in item.groups"
-  with_items: "{{ users }}"
-  loop_control:
-    loop_var: item
-
-# ───────────── SSHD Configuration ─────────────
-- name: Enable sshd_config includes
-  lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "^#?Include"
-    line: "Include /etc/ssh/sshd_config.d/*.conf"
-    state: present
-
-- name: Enforce SSH Protocol 2
-  lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "^Protocol"
-    line: "Protocol 2"
-    state: present
-
-# ───────────── SSHD Hardening ─────────────
-- name: Set SSHD logging and session limits
-  block:
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^SyslogFacility", line: "SyslogFacility AUTH" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^LogLevel", line: "LogLevel VERBOSE" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^MaxAuthTries", line: "MaxAuthTries 3" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^MaxSessions", line: "MaxSessions 10" }
-
-- name: Set SSHD authentication options
-  block:
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^LoginGraceTime", line: "LoginGraceTime 30" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^MaxStartups", line: "MaxStartups 3:30:9" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PermitRootLogin", line: "PermitRootLogin no" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PasswordAuthentication", line: "PasswordAuthentication no" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PermitEmptyPasswords", line: "PermitEmptyPasswords no" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PubkeyAuthentication", line: "PubkeyAuthentication yes" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^StrictModes", line: "StrictModes yes" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^TCPKeepAlive", line: "TCPKeepAlive no" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^ClientAliveInterval", line: "ClientAliveInterval 10" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^ClientAliveCountMax", line: "ClientAliveCountMax 3" }
-
-- name: Set SSHD file and subsystem settings
-  block:
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^AuthorizedKeysFile", line: "AuthorizedKeysFile %h/.ssh/authorized_keys" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^UsePAM", line: "UsePAM yes" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^X11Forwarding", line: "X11Forwarding no" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PrintMotd", line: "PrintMotd no" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PrintLastLog", line: "PrintLastLog yes" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^Banner", line: "Banner none" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^DebianBanner", line: "DebianBanner no" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^AcceptEnv", line: "AcceptEnv LANG LC_*" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^Subsystem", line: "Subsystem sftp  /usr/lib/openssh/sftp-server" }
-
-- name: Disable unused or legacy auth mechanisms
-  block:
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^UsePrivilegeSeparation", line: "UsePrivilegeSeparation yes" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^HostbasedAuthentication", line: "HostbasedAuthentication no" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^IgnoreRhosts", line: "IgnoreRhosts yes" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^ChallengeResponseAuthentication", line: "ChallengeResponseAuthentication no" }
-
-- name: Disable weak SSH KEX, MACs, and Ciphers (sshd_config)
-  block:
-    - lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: "^KexAlgorithms"
-        line: "KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256"
+  tasks:
+    # ───────────── User Management ─────────────
+    - name: Ensure groups exist
+      group:
+        name: "{{ item.groups }}"
         state: present
-    - lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: "^MACs"
-        line: "MACs hmac-sha2-512,hmac-sha2-256,hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com"
+      with_items: "{{ users }}"
+      loop_control:
+        loop_var: item
+
+    - name: Create users and assign groups
+      user:
+        name: "{{ item.username }}"
+        shell: /bin/bash
+        createhome: yes
+        comment: 'Created by Ansible'
+        groups: "{{ item.groups }}"
+      with_items: "{{ users }}"
+      loop_control:
+        loop_var: item
+
+    - name: Upload authorized SSH keys
+      authorized_key:
+        user: "{{ item.username }}"
+        key: "{{ lookup('file', 'files/{{ item.username }}.pub') }}"
+      with_items: "{{ users }}"
+      loop_control:
+        loop_var: item
+
+    # ───────────── Sudoers Config ─────────────
+    - name: Grant sudo access to groups
+      lineinfile:
+        dest: /etc/sudoers
+        insertafter: EOF
+        line: "%{{ item }} ALL=(ALL) NOPASSWD: ALL"
+        validate: 'visudo -cf %s'
+      loop:
+        - devops
+        - developer
+        - leader
+
+    # ───────────── Set Environment Variables ─────────────
+    - name: Set USER_ROLE environment variable for devops and developer
+      lineinfile:
+        path: "/home/{{ item.username }}/.bashrc"
+        line: "export USER_ROLE=devops"
         state: present
-    - lineinfile:
+      when: "'devops' in item.groups or 'developer' in item.groups"
+      with_items: "{{ users }}"
+      loop_control:
+        loop_var: item
+
+    - name: Set USER_ROLE environment variable for leader
+      lineinfile:
+        path: "/home/{{ item.username }}/.bashrc"
+        line: "export USER_ROLE=leader"
+        state: present
+      when: "'leader' in item.groups"
+      with_items: "{{ users }}"
+      loop_control:
+        loop_var: item
+
+    # ───────────── SSHD Configuration ─────────────
+    - name: Enable sshd_config includes
+      lineinfile:
         path: /etc/ssh/sshd_config
-        regexp: "^Ciphers"
-        line: "Ciphers aes256-ctr,aes192-ctr,aes128-ctr"
+        regexp: "^#?Include"
+        line: "Include /etc/ssh/sshd_config.d/*.conf"
         state: present
 
-# ───────────── SSH Client Hardening ─────────────
-- name: Harden SSH client configuration (/etc/ssh/ssh_config)
-  blockinfile:
-    path: /etc/ssh/ssh_config
-    block: |
-      Host *
-          KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
-          MACs hmac-sha2-512,hmac-sha2-256,hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
-          Ciphers aes256-ctr,aes192-ctr,aes128-ctr
-    marker: "# {mark} SSH Client Hardening"
+    - name: Enforce SSH Protocol 2
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^Protocol"
+        line: "Protocol 2"
+        state: present
 
-- name: Harden SSH client (~/.ssh/config) for each user
-  blockinfile:
-    path: "/home/{{ item.username }}/.ssh/config"
-    create: yes
-    owner: "{{ item.username }}"
-    group: "{{ item.username }}"
-    mode: '0600'
-    block: |
-      Host *
-          KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
-          MACs hmac-sha2-512,hmac-sha2-256,hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
-          Ciphers aes256-ctr,aes192-ctr,aes128-ctr
-  with_items: "{{ users }}"
-  loop_control:
-    loop_var: item
+    # ───────────── SSHD Hardening ─────────────
+    - name: Set SSHD logging and session limits
+      block:
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^SyslogFacility", line: "SyslogFacility AUTH" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^LogLevel", line: "LogLevel VERBOSE" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^MaxAuthTries", line: "MaxAuthTries 3" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^MaxSessions", line: "MaxSessions 10" }
 
-# ───────────── SSHD Audit Settings ─────────────
-- name: Configure sshd for SSH audit and session recording
-  block:
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PermitTTY", line: "PermitTTY yes" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PrintMotd", line: "PrintMotd no" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^LogLevel", line: "LogLevel VERBOSE" }
-    - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^AcceptEnv", line: "AcceptEnv LANG LC_*" }
+    - name: Set SSHD authentication options
+      block:
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^LoginGraceTime", line: "LoginGraceTime 30" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^MaxStartups", line: "MaxStartups 3:30:9" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PermitRootLogin", line: "PermitRootLogin no" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PasswordAuthentication", line: "PasswordAuthentication no" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PermitEmptyPasswords", line: "PermitEmptyPasswords no" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PubkeyAuthentication", line: "PubkeyAuthentication yes" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^StrictModes", line: "StrictModes yes" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^TCPKeepAlive", line: "TCPKeepAlive no" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^ClientAliveInterval", line: "ClientAliveInterval 10" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^ClientAliveCountMax", line: "ClientAliveCountMax 3" }
 
-# ───────────── SSH Session Recording ─────────────
-- name: Configure command logging for all users
-  copy:
-    dest: "/etc/profile.d/logcommands.sh"
-    content: |
-      export HISTTIMEFORMAT="%F %T "
-      export PROMPT_COMMAND='RETRN_VAL=$?;logger -p local6.debug "$(whoami) [$$]: $(history 1 | sed "s/^[ ]*[0-9]\+[ ]*//")"'
-    owner: root
-    group: root
-    mode: '0644'
+    - name: Set SSHD file and subsystem settings
+      block:
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^AuthorizedKeysFile", line: "AuthorizedKeysFile %h/.ssh/authorized_keys" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^UsePAM", line: "UsePAM yes" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^X11Forwarding", line: "X11Forwarding no" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PrintMotd", line: "PrintMotd no" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PrintLastLog", line: "PrintLastLog yes" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^Banner", line: "Banner none" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^DebianBanner", line: "DebianBanner no" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^AcceptEnv", line: "AcceptEnv LANG LC_*" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^Subsystem", line: "Subsystem sftp  /usr/lib/openssh/sftp-server" }
 
-- name: Ensure rsyslog captures local6 logs
-  lineinfile:
-    path: /etc/rsyslog.d/50-default.conf
-    regexp: '^local6\.\*'
-    line: 'local6.*    /var/log/command.log'
-    create: yes
+    - name: Disable unused or legacy auth mechanisms
+      block:
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^UsePrivilegeSeparation", line: "UsePrivilegeSeparation yes" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^HostbasedAuthentication", line: "HostbasedAuthentication no" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^IgnoreRhosts", line: "IgnoreRhosts yes" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^ChallengeResponseAuthentication", line: "ChallengeResponseAuthentication no" }
 
-# ───────────── Force root load logcommands.sh ─────────────
-- name: Ensure root user sources /etc/profile.d/logcommands.sh
-  lineinfile:
-    path: /root/.bashrc
-    line: 'source /etc/profile.d/logcommands.sh'
-    state: present
-    create: yes
+    - name: Disable weak SSH KEX, MACs, and Ciphers (sshd_config)
+      block:
+        - lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^KexAlgorithms"
+            line: "KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256"
+            state: present
+        - lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^MACs"
+            line: "MACs hmac-sha2-512,hmac-sha2-256,hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com"
+            state: present
+        - lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: "^Ciphers"
+            line: "Ciphers aes256-ctr,aes192-ctr,aes128-ctr"
+            state: present
 
-# ───────────── Restart Services ─────────────
-- name: Restart rsyslog service
-  service:
-    name: rsyslog
-    state: restarted
+    # ───────────── SSH Client Hardening ─────────────
+    - name: Harden SSH client configuration (/etc/ssh/ssh_config)
+      blockinfile:
+        path: /etc/ssh/ssh_config
+        block: |
+          Host *
+              KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
+              MACs hmac-sha2-512,hmac-sha2-256,hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+              Ciphers aes256-ctr,aes192-ctr,aes128-ctr
+        marker: "# {mark} SSH Client Hardening"
 
-- name: Restart SSH service
-  service:
-    name: ssh
-    state: restarted
+    - name: Harden SSH client (~/.ssh/config) for each user
+      blockinfile:
+        path: "/home/{{ item.username }}/.ssh/config"
+        create: yes
+        owner: "{{ item.username }}"
+        group: "{{ item.username }}"
+        mode: '0600'
+        block: |
+          Host *
+              KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
+              MACs hmac-sha2-512,hmac-sha2-256,hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+              Ciphers aes256-ctr,aes192-ctr,aes128-ctr
+      with_items: "{{ users }}"
+      loop_control:
+        loop_var: item
+
+    # ───────────── SSHD Audit Settings ─────────────
+    - name: Configure sshd for SSH audit and session recording
+      block:
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PermitTTY", line: "PermitTTY yes" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^PrintMotd", line: "PrintMotd no" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^LogLevel", line: "LogLevel VERBOSE" }
+        - lineinfile: { path: /etc/ssh/sshd_config, regexp: "^AcceptEnv", line: "AcceptEnv LANG LC_*" }
+
+    # ───────────── SSH Session Recording ─────────────
+    - name: Configure command logging for all users
+      copy:
+        dest: "/etc/profile.d/logcommands.sh"
+        content: |
+          export HISTTIMEFORMAT="%F %T "
+          export PROMPT_COMMAND='RETRN_VAL=$?;logger -p local6.debug "$(whoami) [$$]: $(history 1 | sed "s/^[ ]*[0-9]\+[ ]*//")"'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Ensure rsyslog captures local6 logs
+      lineinfile:
+        path: /etc/rsyslog.d/50-default.conf
+        regexp: '^local6\.\*'
+        line: 'local6.*    /var/log/command.log'
+        create: yes
+
+    # ───────────── Force root load logcommands.sh ─────────────
+    - name: Ensure root user sources /etc/profile.d/logcommands.sh
+      lineinfile:
+        path: /root/.bashrc
+        line: 'source /etc/profile.d/logcommands.sh'
+        state: present
+        create: yes
+
+    # ───────────── Restart Services ─────────────
+    - name: Restart rsyslog service
+      service:
+        name: rsyslog
+        state: restarted
+
+    - name: Restart SSH service
+      service:
+        name: ssh
+        state: restarted
